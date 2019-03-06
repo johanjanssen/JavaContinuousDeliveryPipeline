@@ -463,12 +463,10 @@ import io.gatling.http.Predef._
 import scala.concurrent.duration._
 
 class BasicSimulation extends Simulation {
-  val url = System.getProperty("hello.test.service.uri")
-
   val scn = scenario("My scenario").repeat(3) {
     exec(
       http("Ping")
-        .get(url)
+        .get("http://testapp:8080/greeting")
         .check(status.is(200))
     ).pause(10 millisecond)
   }
@@ -485,7 +483,7 @@ class BasicSimulation extends Simulation {
 ```groovy
 stage('Performance analysis') {
 	steps {
-		sh 'mvn gatling:test -Dgatling.simulationClass=gatling.BasicSimulation -Dhello.test.service.uri=http://testapp:8080/greeting'
+		sh 'mvn gatling:test -Dgatling.simulationClass=gatling.BasicSimulation'
 		// Archive results for Jenkins visualization
 		gatlingArchive()
 	}
