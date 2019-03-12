@@ -1,0 +1,84 @@
+pipeline {
+    agent any
+
+    tools {
+        jdk 'Java11'
+    }
+
+    environment {
+        SONARQUBE_LOGIN_TOKEN = '4405e31552559f0f6afab58eb592e74573f5bc3b'
+        DOCKER_REGISTRY_PORT = '8107'
+        APPLICATION_PORT = '8110'
+    }
+
+    stages {
+        stage('Clean') {
+            steps {
+                sh 'mvn clean'
+            }
+        }
+
+        stage('Security analysis') {
+            steps {
+                // Scan for known CVE's in project. Fail on severity 8+ CVE's.
+                sh 'mvn org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=8 -B'
+            }
+        }
+
+        stage('Unit tests with coverage') {
+            steps {
+                sh 'mvn org.jacoco:jacoco-maven-plugin:prepare-agent install -Dmaven.test.failure.ignore=false'
+            }
+        }
+
+        stage('Mutation tests') {
+            steps {
+                sh 'mvn org.pitest:pitest-maven:mutationCoverage'
+            }
+        }
+
+        stage('SonarQube analysis') {
+            steps {
+                sh 'mvn sonar:sonar -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=${SONARQUBE_LOGIN_TOKEN}'
+            }
+        }
+
+        stage('Upload artifacts') {
+            steps {
+                sh 'mvn deploy -Dmaven.test.skip=true -Dmaven.install.skip=true'
+            }
+        }
+
+        stage('Retrieve commit id') {
+            steps {
+                sh "git rev-parse HEAD > commitid"
+                script {
+                    commitid = readFile('commitid').trim()
+                }
+            }
+        }
+        stage('Create docker image') {
+            steps {
+                sh "docker build -t 127.0.0.1:${DOCKER_REGISTRY_PORT}/testapp:latest -t 127.0.0.1:${DOCKER_REGISTRY_PORT}/testapp:'${commitid}' ."
+                sh "docker push 127.0.0.1:${DOCKER_REGISTRY_PORT}/testapp:'${commitid}'"
+                sh "docker push 127.0.0.1:${DOCKER_REGISTRY_PORT}/testapp:latest"
+            }
+        }
+        stage('Deploy to test') {
+            steps {
+                // Stop container if it's running. Always return true, so build does not fail if the container does not exist.
+                sh "docker stop testapp || true && docker rm testapp || true"
+                sh "docker run -d --name testapp -p ${APPLICATION_PORT}:8080 127.0.0.1:${DOCKER_REGISTRY_PORT}/testapp:'${commitid}'"
+                sh "docker network connect --alias testapp pipeline_default testapp"
+            }
+        }
+
+        stage('Performance analysis') {
+            steps {
+                sh 'mvn gatling:test -Dgatling.simulationClass=gatling.BasicSimulation -Dhello.test.service.uri=http://testapp:8080/greeting'
+                // Archive results for Jenkins visualization
+                gatlingArchive()
+            }
+        }
+    }
+}
